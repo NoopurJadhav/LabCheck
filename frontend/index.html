@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LabCheck — Automated Report Generation & Error Checking</title>
+<meta name="theme-color" content="#0F1720" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icon.svg" type="image/svg+xml" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0F1720;
+    --surface:#16212B;
+    --surface-2:#1D2A36;
+    --border:#25333F;
+    --text:#E7EDF3;
+    --text-muted:#8B99A8;
+    --accent:#3EC1B3;
+    --accent-dim:#2C8F85;
+    --flag:#F5A623;
+    --critical:#E5484D;
+    --normal:#3EC1B3;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:'Inter',sans-serif; -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+  }
+  h1,h2,h3,.brand{font-family:'Space Grotesk',sans-serif;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+
+  /* ---- App shell ---- */
+  header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:16px 22px; border-bottom:1px solid var(--border);
+    position:sticky; top:0; background:rgba(15,23,32,0.9); backdrop-filter:blur(8px);
+    z-index:10;
+  }
+  .brand{font-size:19px; font-weight:700; display:flex; align-items:center; gap:8px;}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent); box-shadow:0 0 12px var(--accent);}
+  nav.roles{display:flex; gap:6px; background:var(--surface); padding:4px; border-radius:999px; border:1px solid var(--border);}
+  nav.roles button{
+    border:none; background:transparent; color:var(--text-muted); padding:8px 14px;
+    border-radius:999px; font-size:13px; font-weight:600; cursor:pointer; transition:.2s;
+  }
+  nav.roles button.active{background:var(--accent); color:#06201D;}
+
+  main{max-width:980px; margin:0 auto; padding:28px 20px 80px;}
+  .card{
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+    padding:22px; margin-bottom:18px;
+  }
+  .muted{color:var(--text-muted); font-size:13.5px;}
+
+  /* ---- Upload zone ---- */
+  .dropzone{
+    border:2px dashed var(--border); border-radius:var(--radius); padding:40px 20px;
+    text-align:center; cursor:pointer; transition:.25s; background:var(--surface-2);
+  }
+  .dropzone:hover, .dropzone.drag{border-color:var(--accent); background:#1A2732;}
+  .dropzone svg{margin-bottom:10px;}
+  input[type=file]{display:none;}
+
+  button.primary{
+    background:var(--accent); color:#06201D; border:none; font-weight:700;
+    padding:11px 20px; border-radius:10px; cursor:pointer; font-size:14px;
+    transition:transform .15s, background .15s;
+  }
+  button.primary:hover{background:#54D6C8; transform:translateY(-1px);}
+  button.primary:disabled{opacity:.4; cursor:not-allowed; transform:none;}
+  button.ghost{
+    background:transparent; border:1px solid var(--border); color:var(--text);
+    padding:10px 16px; border-radius:10px; cursor:pointer; font-size:13.5px;
+  }
+  button.ghost:hover{border-color:var(--accent); color:var(--accent);}
+
+  /* ---- Summary chips ---- */
+  .summary-row{display:flex; gap:10px; flex-wrap:wrap; margin:14px 0 4px;}
+  .chip{
+    padding:9px 14px; border-radius:10px; font-size:13px; font-weight:600;
+    display:flex; align-items:center; gap:7px; background:var(--surface-2); border:1px solid var(--border);
+  }
+  .chip .n{font-family:'JetBrains Mono',monospace; font-size:15px;}
+  .chip.normal{color:var(--normal);}
+  .chip.flag{color:var(--flag);}
+  .chip.critical{color:var(--critical);}
+
+  /* ---- Results table ---- */
+  table{width:100%; border-collapse:collapse; margin-top:10px; font-size:13.5px;}
+  th{text-align:left; color:var(--text-muted); font-weight:600; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; padding:8px 10px; border-bottom:1px solid var(--border);}
+  td{padding:10px; border-bottom:1px solid var(--border);}
+  td.val{font-family:'JetBrains Mono',monospace; font-weight:600;}
+  tr.NORMAL td.val{border-left:3px solid var(--normal);}
+  tr.OUT_OF_RANGE td.val{border-left:3px solid var(--flag); color:var(--flag);}
+  tr.CRITICAL td.val{border-left:3px solid var(--critical); color:var(--critical);}
+  tr.UNKNOWN_TEST td.val{border-left:3px solid #555;}
+  .status-pill{
+    font-size:11px; font-weight:700; padding:3px 9px; border-radius:999px; text-transform:uppercase;
+  }
+  .status-pill.NORMAL{background:rgba(62,193,179,.15); color:var(--normal);}
+  .status-pill.OUT_OF_RANGE{background:rgba(245,166,35,.15); color:var(--flag);}
+  .status-pill.CRITICAL{background:rgba(229,72,77,.15); color:var(--critical);}
+  .status-pill.UNKNOWN_TEST{background:rgba(255,255,255,.08); color:#aaa;}
+
+  .empty{text-align:center; padding:50px 20px; color:var(--text-muted);}
+  .fade-in{animation:fadeIn .35s ease;}
+  @keyframes fadeIn{from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);}}
+
+  .signoff-box{display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px;}
+  input.text-input{
+    background:var(--surface-2); border:1px solid var(--border); color:var(--text);
+    padding:10px 12px; border-radius:9px; font-size:13.5px; flex:1; min-width:180px;
+  }
+  .signed-badge{color:var(--normal); font-size:13px; font-weight:600;}
+  footer{text-align:center; padding:20px; color:var(--text-muted); font-size:12px;}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="dot"></span>LabCheck</div>
+  <nav class="roles" id="roleNav">
+    <button data-role="technician" class="active">Technician</button>
+    <button data-role="pathologist">Pathologist</button>
+    <button data-role="admin">Admin</button>
+  </nav>
+</header>
+
+<main id="app"></main>
+
+<footer>LabCheck · demo build · reference ranges are illustrative, not clinically validated</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
