@@ -117,6 +117,28 @@
   }
   .signed-badge{color:var(--normal); font-size:13px; font-weight:600;}
   footer{text-align:center; padding:20px; color:var(--text-muted); font-size:12px;}
+
+  .table-scroll{overflow-x:auto; -webkit-overflow-scrolling:touch; margin:0 -22px; padding:0 22px;}
+  .table-scroll table{min-width:560px;}
+  .status-pill{white-space:nowrap;}
+
+  /* ---- Mobile ---- */
+  @media (max-width: 600px){
+    header{padding:12px 14px; flex-wrap:wrap; gap:10px;}
+    .brand{font-size:16px;}
+    nav.roles{width:100%; justify-content:space-between;}
+    nav.roles button{padding:7px 10px; font-size:12px; flex:1;}
+    main{padding:16px 12px 60px;}
+    .card{padding:14px;}
+    h2{font-size:17px;}
+    .summary-row{gap:8px;}
+    .chip{padding:7px 10px; font-size:12px;}
+    .table-scroll{margin:0 -14px; padding:0 14px;}
+    table{font-size:12.5px;}
+    th{font-size:10px; padding:6px 8px;}
+    td{padding:8px;}
+    .dropzone{padding:26px 14px;}
+  }
 </style>
 </head>
 <body>
@@ -137,3 +159,5 @@
 <script src="app.js"></script>
 </body>
 </html>
+
+
