@@ -219,6 +219,7 @@ function renderResultsCard(showSignoff) {
       <div class="chip flag"><span class="n">${s.out_of_range}</span> out of range</div>
       <div class="chip critical"><span class="n">${s.critical}</span> critical</div>
     </div>
+    <div class="table-scroll">
     <table>
       <thead><tr><th>Patient</th><th>Test</th><th>Value</th><th>Normal range</th><th>Status</th></tr></thead>
       <tbody>
@@ -233,6 +234,7 @@ function renderResultsCard(showSignoff) {
         `).join("")}
       </tbody>
     </table>
+    </div>
     <div style="margin-top:16px; display:flex; gap:10px;">
       <button class="ghost" id="downloadBtn">Download PDF</button>
     </div>
