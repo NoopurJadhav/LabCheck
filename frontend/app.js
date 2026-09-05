@@ -1,7 +1,8 @@
 // ---- CONFIG ----
 // Point this at your backend. While developing locally it's the FastAPI
-// server started with `uvicorn main:app --reload --port 8000`.
-const API_BASE = window.LABCHECK_API_BASE || "http://127.0.0.1:8000";
+// server started with `uvicorn main:app --reload --port 8000`. Once
+// deployed, this points at the live Render URL instead.
+const API_BASE = window.LABCHECK_API_BASE || "https://labcheckk.onrender.com";
 
 // ---- STATE ----
 let state = {
@@ -11,6 +12,7 @@ let state = {
   summary: null,
   results: null,
   signed: null,
+  pendingMapping: null, // { upload_id, columns, preview, required_fields, optional_fields }
 };
 
 const app = document.getElementById("app");
@@ -64,6 +66,7 @@ function renderTechnician() {
     if (e.target.files.length) handleFile(e.target.files[0]);
   });
 
+  if (state.pendingMapping) renderMappingCard();
   if (state.results) renderResultsCard(false);
 }
 
@@ -76,13 +79,118 @@ async function handleFile(file) {
     const res = await fetch(`${API_BASE}/api/upload`, { method: "POST", body: form });
     if (!res.ok) throw new Error((await res.json()).detail || "Upload failed");
     const data = await res.json();
+
+    if (data.needs_mapping) {
+      state.pendingMapping = data;
+      statusEl.textContent = "This file's layout hasn't been seen before — match the columns below.";
+      render();
+      return;
+    }
+
     state.uploadedRows = data.rows;
-    statusEl.textContent = `Parsed ${data.row_count} rows. Running checks…`;
+    statusEl.textContent = data.auto_mapped
+      ? `Parsed ${data.row_count} rows (format recognized automatically). Running checks…`
+      : `Parsed ${data.row_count} rows. Running checks…`;
     await runAnalysis();
     statusEl.textContent = `✓ ${data.row_count} rows analyzed.`;
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
   }
+}
+
+function renderMappingCard() {
+  const pm = state.pendingMapping;
+  const card = document.createElement("div");
+  card.className = "card fade-in";
+  const allFields = [...pm.required_fields, ...pm.optional_fields];
+  const fieldLabels = {
+    patient_id: "Patient ID *", patient_name: "Patient Name",
+    test_name: "Test Name *", value: "Value *", unit: "Unit",
+  };
+
+  card.innerHTML = `
+    <h2 style="margin-top:0">Match your columns</h2>
+    <p class="muted">We don't recognize this file's column headings yet. Tell us which
+    column in <em>your</em> file matches each field below — you'll only need to do this once
+    for this format.</p>
+    <div id="mappingRows" style="display:flex; flex-direction:column; gap:10px; margin:16px 0;">
+      ${allFields.map(field => `
+        <div style="display:flex; align-items:center; gap:12px;">
+          <label style="width:150px; font-size:13.5px; font-weight:600;">${fieldLabels[field] || field}</label>
+          <select class="text-input" data-field="${field}" style="flex:1;">
+            <option value="">— not present —</option>
+            ${pm.columns.map(c => `<option value="${c}">${c}</option>`).join("")}
+          </select>
+        </div>
+      `).join("")}
+    </div>
+    <p class="muted" style="margin-bottom:6px;">Preview of your file's first rows:</p>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead><tr>${pm.columns.map(c => `<th>${c}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${pm.preview.map(row => `<tr>${pm.columns.map(c => `<td>${row[c] ?? ""}</td>`).join("")}</tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px; margin-top:16px;">
+      <label style="display:flex; align-items:center; gap:6px; font-size:13.5px;">
+        <input type="checkbox" id="saveProfileCheck" checked />
+        Remember this format for next time
+      </label>
+    </div>
+    <div style="margin-top:14px; display:flex; gap:10px;">
+      <button class="primary" id="confirmMappingBtn">Confirm & analyze</button>
+      <button class="ghost" id="cancelMappingBtn">Cancel</button>
+    </div>
+    <div id="mappingStatus" class="muted" style="margin-top:8px;"></div>
+  `;
+  app.appendChild(card);
+
+  // Best-effort pre-fill: guess a matching column by loose name similarity
+  allFields.forEach(field => {
+    const select = card.querySelector(`select[data-field="${field}"]`);
+    const guess = pm.columns.find(c => {
+      const norm = c.toLowerCase().replace(/[^a-z]/g, "");
+      const target = field.replace(/_/g, "");
+      return norm.includes(target) || target.includes(norm);
+    });
+    if (guess) select.value = guess;
+  });
+
+  document.getElementById("cancelMappingBtn").addEventListener("click", () => {
+    state.pendingMapping = null;
+    render();
+  });
+
+  document.getElementById("confirmMappingBtn").addEventListener("click", async () => {
+    const mapping = {};
+    card.querySelectorAll("select[data-field]").forEach(sel => {
+      if (sel.value) mapping[sel.dataset.field] = sel.value;
+    });
+    for (const req of pm.required_fields) {
+      if (!mapping[req]) {
+        document.getElementById("mappingStatus").textContent = `Please select a column for ${fieldLabels[req] || req}.`;
+        return;
+      }
+    }
+    const saveProfile = document.getElementById("saveProfileCheck").checked;
+    document.getElementById("mappingStatus").textContent = "Applying…";
+    try {
+      const res = await fetch(`${API_BASE}/api/upload/${pm.upload_id}/map`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mapping, save_profile: saveProfile }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || "Mapping failed");
+      const data = await res.json();
+      state.pendingMapping = null;
+      state.uploadedRows = data.rows;
+      await runAnalysis();
+    } catch (err) {
+      document.getElementById("mappingStatus").textContent = `Error: ${err.message}`;
+    }
+  });
 }
 
 async function runAnalysis() {
