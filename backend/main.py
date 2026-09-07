@@ -4,15 +4,16 @@ LabCheck - Automated Lab Report Generation & Error-Checking Backend
 Run with:  uvicorn main:app --reload --port 8000
 """
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import pandas as pd
 import io
 import datetime
 import uuid
+import traceback
 
 from reference_ranges import REFERENCE_RANGES, find_test_profile
 from report_pdf import build_pdf_report
@@ -29,8 +30,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---- In-memory store (swap for a real DB — Postgres/SQLite — before production) ----
+
+# Without this, an unhandled crash anywhere in the app skips FastAPI's
+# normal CORS handling, and the browser reports a confusing "CORS
+# blocked" error instead of the real problem. This guarantees every
+# response - success, handled error, or unexpected crash - always
+# carries the CORS header, and always tells us the real error message.
+@app.exception_handler(Exception)
+async def catch_all_exceptions(request: Request, exc: Exception):
+    print("UNHANDLED ERROR:", traceback.format_exc())
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Server error: {type(exc).__name__}: {exc}"},
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
+
+# ---- In-memory stores (swap for a real DB — Postgres/SQLite — before production) ----
 REPORTS = {}
+PENDING_UPLOADS = {}   # upload_id -> raw pandas DataFrame, waiting for a column mapping
+INSTRUMENT_PROFILES = {}  # signature (sorted tuple of raw column names) -> {canonical_field: raw_column}
+
+REQUIRED_FIELDS = ["patient_id", "test_name", "value"]
+OPTIONAL_FIELDS = ["patient_name", "unit"]
+
+
+def _signature(raw_columns):
+    """A fingerprint of a file's raw column names, used to recognise
+    'I've seen this exact instrument export shape before'."""
+    return tuple(sorted(str(c).strip() for c in raw_columns))
+
+
+def _apply_mapping(df: pd.DataFrame, mapping: dict) -> list:
+    """mapping: {canonical_field: raw_column_name}. Returns clean row dicts."""
+    out = pd.DataFrame()
+    for field in REQUIRED_FIELDS:
+        if field not in mapping or mapping[field] not in df.columns:
+            raise HTTPException(400, f"Mapping is missing required field: {field}")
+        out[field] = df[mapping[field]]
+    for field in OPTIONAL_FIELDS:
+        if field in mapping and mapping[field] in df.columns:
+            out[field] = df[mapping[field]]
+        else:
+            out[field] = ""
+    out["value"] = pd.to_numeric(out["value"], errors="coerce")
+    out = out.dropna(subset=["value"])
+    out = out[REQUIRED_FIELDS + OPTIONAL_FIELDS].fillna("")
+    return out.to_dict(orient="records")
 
 
 class ResultRow(BaseModel):
@@ -59,58 +104,100 @@ def health():
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
     """
-    Accepts a raw instrument export (CSV or XLSX).
-    Expected (flexible) columns, case-insensitive:
-      Patient ID | Patient Name | Test Name | Value | Unit
-    Returns parsed rows so the frontend can preview before analysis.
+    Accepts a raw instrument export (CSV or XLSX) in ANY column layout.
+
+    Flow:
+      1. Try to auto-detect columns via common aliases (Patient ID, ID, Sample ID, etc).
+      2. If this exact file shape was mapped before (a saved instrument profile),
+         apply that mapping automatically — no need to ask again.
+      3. Otherwise, return needs_mapping=true with the raw columns + a preview,
+         so the frontend can show a "which column is which?" screen once.
     """
     name = file.filename.lower()
     content = await file.read()
 
     try:
         if name.endswith(".csv"):
-            df = pd.read_csv(io.BytesIO(content))
+            df_raw = pd.read_csv(io.BytesIO(content))
         elif name.endswith(".xlsx") or name.endswith(".xls"):
-            df = pd.read_excel(io.BytesIO(content))
+            df_raw = pd.read_excel(io.BytesIO(content))
         else:
             raise HTTPException(400, "Unsupported file type. Upload .csv or .xlsx")
     except Exception as e:
         raise HTTPException(400, f"Could not parse file: {e}")
 
-    # Normalize column names (instruments export inconsistent headers)
-    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+    df_raw.columns = [str(c).strip() for c in df_raw.columns]
+    signature = _signature(df_raw.columns)
 
-    col_map = {}
-    for col in df.columns:
-        if col in ("patient_id", "patientid", "id", "sample_id"):
-            col_map[col] = "patient_id"
-        elif col in ("patient_name", "name"):
-            col_map[col] = "patient_name"
-        elif col in ("test_name", "test", "parameter", "analyte"):
-            col_map[col] = "test_name"
-        elif col in ("value", "result", "reading"):
-            col_map[col] = "value"
-        elif col in ("unit", "units"):
-            col_map[col] = "unit"
-    df = df.rename(columns=col_map)
+    # 2. Have we already learned this exact instrument's format?
+    if signature in INSTRUMENT_PROFILES:
+        mapping = INSTRUMENT_PROFILES[signature]
+        rows = _apply_mapping(df_raw, mapping)
+        return {"rows": rows, "row_count": len(rows), "auto_mapped": True}
 
-    required = {"patient_id", "test_name", "value"}
-    missing = required - set(df.columns)
-    if missing:
-        raise HTTPException(
-            400,
-            f"Missing required columns: {missing}. "
-            f"Found columns: {list(df.columns)}",
-        )
+    # 1. Try auto-detecting via common aliases
+    normalized = {c: c.strip().lower().replace(" ", "_") for c in df_raw.columns}
+    alias_map = {}
+    for orig, norm in normalized.items():
+        if norm in ("patient_id", "patientid", "id", "sample_id"):
+            alias_map["patient_id"] = orig
+        elif norm in ("patient_name", "name"):
+            alias_map["patient_name"] = orig
+        elif norm in ("test_name", "test", "parameter", "analyte"):
+            alias_map["test_name"] = orig
+        elif norm in ("value", "result", "reading"):
+            alias_map["value"] = orig
+        elif norm in ("unit", "units"):
+            alias_map["unit"] = orig
 
-    if "patient_name" not in df.columns:
-        df["patient_name"] = ""
-    if "unit" not in df.columns:
-        df["unit"] = ""
+    if all(f in alias_map for f in REQUIRED_FIELDS):
+        rows = _apply_mapping(df_raw, alias_map)
+        return {"rows": rows, "row_count": len(rows), "auto_mapped": True}
 
-    df = df[["patient_id", "patient_name", "test_name", "value", "unit"]].fillna("")
-    rows = df.to_dict(orient="records")
-    return {"rows": rows, "row_count": len(rows)}
+    # 3. Couldn't figure it out — ask the human to map it, once.
+    upload_id = str(uuid.uuid4())[:8]
+    PENDING_UPLOADS[upload_id] = df_raw
+    preview = df_raw.head(5).fillna("").astype(str).to_dict(orient="records")
+    return {
+        "needs_mapping": True,
+        "upload_id": upload_id,
+        "columns": list(df_raw.columns),
+        "preview": preview,
+        "required_fields": REQUIRED_FIELDS,
+        "optional_fields": OPTIONAL_FIELDS,
+    }
+
+
+class MappingRequest(BaseModel):
+    mapping: dict  # {"patient_id": "raw col name", "test_name": "...", "value": "...", ...}
+    save_profile: bool = False
+
+
+@app.post("/api/upload/{upload_id}/map")
+def apply_mapping(upload_id: str, payload: MappingRequest):
+    df_raw = PENDING_UPLOADS.get(upload_id)
+    if df_raw is None:
+        raise HTTPException(404, "Upload not found or already processed — please re-upload the file.")
+
+    rows = _apply_mapping(df_raw, payload.mapping)
+
+    if payload.save_profile:
+        signature = _signature(df_raw.columns)
+        INSTRUMENT_PROFILES[signature] = payload.mapping
+
+    del PENDING_UPLOADS[upload_id]
+    return {"rows": rows, "row_count": len(rows), "auto_mapped": False}
+
+
+@app.get("/api/profiles")
+def list_profiles():
+    return {
+        "count": len(INSTRUMENT_PROFILES),
+        "profiles": [
+            {"columns": list(sig), "mapping": mapping}
+            for sig, mapping in INSTRUMENT_PROFILES.items()
+        ],
+    }
 
 
 @app.post("/api/analyze")
