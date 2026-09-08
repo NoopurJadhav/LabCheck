@@ -47,7 +47,7 @@ function renderTechnician() {
         <path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <div><strong>Drop file here</strong> or click to browse</div>
-      <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" />
+      <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,*/*" />
     </div>
     <div id="uploadStatus" class="muted" style="margin-top:10px;"></div>
   `;
