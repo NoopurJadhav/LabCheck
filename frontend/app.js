@@ -211,6 +211,7 @@ function renderResultsCard(showSignoff) {
   const card = document.createElement("div");
   card.className = "card fade-in";
   const s = state.summary;
+  const sigChanges = s.significant_changes || 0;
   card.innerHTML = `
     <h2 style="margin-top:0">Results — Report #${state.reportId}</h2>
     <div class="summary-row">
@@ -218,17 +219,21 @@ function renderResultsCard(showSignoff) {
       <div class="chip normal"><span class="n">${s.normal}</span> normal</div>
       <div class="chip flag"><span class="n">${s.out_of_range}</span> out of range</div>
       <div class="chip critical"><span class="n">${s.critical}</span> critical</div>
+      ${sigChanges > 0 ? `<div class="chip critical"><span class="n">${sigChanges}</span> vs. patient history</div>` : ""}
     </div>
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Patient</th><th>Test</th><th>Value</th><th>Normal range</th><th>Status</th></tr></thead>
+      <thead><tr><th>Patient</th><th>Test</th><th>Value</th><th>Normal range</th><th>vs. last result</th><th>Status</th></tr></thead>
       <tbody>
         ${state.results.map(r => `
           <tr class="${r.status}">
-            <td>${r.patient_name || r.patient_id}<div class="muted mono">${r.patient_id}</div></td>
-            <td>${r.test_name}</td>
+            <td>${r.patient_name || r.patient_id}<div class="muted mono">${r.patient_id}${r.sex ? " · " + r.sex : ""}${r.age ? " · " + r.age + "y" : ""}</div>
+              ${Object.keys(r.extra || {}).length ? `<div class="muted" style="font-size:11px;">${Object.entries(r.extra).map(([k,v])=>`${k}: ${v}`).join(" · ")}</div>` : ""}
+            </td>
+            <td>${r.test_name}${r.used_sex_specific_range ? `<div class="muted" style="font-size:11px;">sex-specific range</div>` : ""}</td>
             <td class="val">${r.value} ${r.unit}</td>
             <td class="muted">${r.normal_range || "—"}</td>
+            <td>${renderDeltaCell(r.delta)}</td>
             <td><span class="status-pill ${r.status}">${r.status.replace("_"," ")}</span></td>
           </tr>
         `).join("")}
@@ -243,6 +248,19 @@ function renderResultsCard(showSignoff) {
   document.getElementById("downloadBtn").addEventListener("click", () => {
     window.open(`${API_BASE}/api/report/${state.reportId}/pdf`, "_blank");
   });
+}
+
+function renderDeltaCell(delta) {
+  if (!delta) return `<span class="muted">first result on file</span>`;
+  const arrow = delta.change_percent > 0 ? "▲" : delta.change_percent < 0 ? "▼" : "—";
+  const color = delta.flag === "SIGNIFICANT_CHANGE" ? "var(--critical)" : "var(--text-muted)";
+  return `
+    <div class="mono" style="color:${color}; font-weight:${delta.flag === "SIGNIFICANT_CHANGE" ? "700" : "400"};">
+      ${arrow} ${Math.abs(delta.change_percent)}%
+    </div>
+    <div class="muted" style="font-size:11px;">was ${delta.previous_value} ${delta.previous_unit || ""}</div>
+    ${delta.flag === "SIGNIFICANT_CHANGE" ? `<div style="font-size:11px; color:var(--critical); font-weight:600;">⚠ significant change</div>` : ""}
+  `;
 }
 
 function renderPathologist() {
