@@ -1,6 +1,11 @@
 """
 Reference range database for common lab tests.
-normal_low / normal_high  = standard adult reference interval
+
+normal_low / normal_high  = standard adult reference interval (used when
+  sex is unknown, or for tests without a clinically meaningful sex split)
+sex_ranges = optional per-sex override, used when the file provides a
+  Sex/Gender column AND this test has a real, recognized difference
+  between male and female ranges (e.g. Hemoglobin, Creatinine).
 plausible_low / plausible_high = physiologically possible bounds
   (values outside this are almost certainly data-entry/instrument errors,
   not real patient results)
@@ -8,7 +13,7 @@ plausible_low / plausible_high = physiologically possible bounds
 NOTE: These are general-purpose teaching/demo values, NOT calibrated for
 clinical use. Before any real deployment, replace these with ranges
 signed off by a qualified pathologist / your lab's SOP, and add
-age/sex/pregnancy-adjusted ranges.
+age/pregnancy-adjusted ranges too.
 """
 
 REFERENCE_RANGES = {
@@ -17,6 +22,10 @@ REFERENCE_RANGES = {
         "unit": "g/dL",
         "normal_low": 12.0, "normal_high": 17.5,
         "plausible_low": 2.0, "plausible_high": 24.0,
+        "sex_ranges": {
+            "M": {"normal_low": 13.5, "normal_high": 17.5},
+            "F": {"normal_low": 12.0, "normal_high": 15.5},
+        },
     },
     "wbc": {
         "aliases": ["white blood cell count", "leukocyte count", "tlc"],
@@ -41,6 +50,10 @@ REFERENCE_RANGES = {
         "unit": "mg/dL",
         "normal_low": 0.6, "normal_high": 1.3,
         "plausible_low": 0.1, "plausible_high": 20.0,
+        "sex_ranges": {
+            "M": {"normal_low": 0.7, "normal_high": 1.3},
+            "F": {"normal_low": 0.6, "normal_high": 1.1},
+        },
     },
     "total cholesterol": {
         "aliases": ["cholesterol"],
@@ -77,6 +90,10 @@ REFERENCE_RANGES = {
         "unit": "U/L",
         "normal_low": 7, "normal_high": 56,
         "plausible_low": 1, "plausible_high": 3000,
+        "sex_ranges": {
+            "M": {"normal_low": 10, "normal_high": 56},
+            "F": {"normal_low": 7, "normal_high": 45},
+        },
     },
     "ast": {
         "aliases": ["sgot", "aspartate aminotransferase"],
@@ -94,7 +111,18 @@ for key, profile in REFERENCE_RANGES.items():
         _ALIAS_LOOKUP[alias] = key
 
 
-def find_test_profile(raw_name: str):
+def _normalize_sex(raw_sex):
+    if not raw_sex:
+        return None
+    s = str(raw_sex).strip().upper()
+    if s in ("M", "MALE"):
+        return "M"
+    if s in ("F", "FEMALE"):
+        return "F"
+    return None
+
+
+def find_test_profile(raw_name: str, sex: str = None):
     if not raw_name:
         return None
     cleaned = raw_name.strip().lower()
@@ -107,7 +135,21 @@ def find_test_profile(raw_name: str):
                 break
     if not canonical:
         return None
+
     profile = REFERENCE_RANGES[canonical]
-    return {"name": canonical, "unit": profile["unit"],
-            "normal_low": profile["normal_low"], "normal_high": profile["normal_high"],
-            "plausible_low": profile["plausible_low"], "plausible_high": profile["plausible_high"]}
+    lo, hi = profile["normal_low"], profile["normal_high"]
+    used_sex_range = False
+
+    norm_sex = _normalize_sex(sex)
+    sex_ranges = profile.get("sex_ranges")
+    if norm_sex and sex_ranges and norm_sex in sex_ranges:
+        lo = sex_ranges[norm_sex]["normal_low"]
+        hi = sex_ranges[norm_sex]["normal_high"]
+        used_sex_range = True
+
+    return {
+        "name": canonical, "unit": profile["unit"],
+        "normal_low": lo, "normal_high": hi,
+        "plausible_low": profile["plausible_low"], "plausible_high": profile["plausible_high"],
+        "used_sex_specific_range": used_sex_range,
+    }
